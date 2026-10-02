@@ -1,0 +1,28 @@
+name: Tests
+
+# Unit tests for this repository alone. The whole platform is exercised
+# together by the integration workflow in the parent repo, customer-management.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci --no-audit --no-fund
+
+      - run: npm run lint
+
+      # Fails on a high or critical advisory in what ships (not dev tools).
+      - run: npm audit --omit=dev --audit-level=high
+
+      - run: npm test
