@@ -2,14 +2,13 @@ const express = require("express");
 const cors = require("cors");
 
 const healthRoutes = require("./routes/healthRoutes");
+const obligationRoutes = require("./routes/obligationRoutes");
 const requestLogger = require("./middleware/requestLogger");
 
 /*
- * Obligation service — deadline rules, the obligations they generate per client and period, extensions, and reminders.
- *
- * A capability service of the profession-bundle platform: profession-neutral,
- * configured by the organization's installed bundle. Only /health exists until
- * its milestone adds the routes (see the plan's Part 3).
+ * Obligation service: compliance deadlines — the bundle's rules, extensions
+ * per period, the deadlines generated from what each client engaged, and the
+ * reminders raised as they come due.
  */
 const app = express();
 
@@ -19,5 +18,6 @@ app.use(express.json());
 app.use(requestLogger);
 
 app.use(healthRoutes);
+app.use(obligationRoutes);
 
 module.exports = app;
