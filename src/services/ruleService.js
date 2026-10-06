@@ -1,5 +1,5 @@
 const pool = require("../config/database");
-const { decide } = require("./bundleSync");
+const { customized, decide, optionsFor } = require("./bundleSync");
 
 /*
  * Deadline rules, installed from the organization's bundle and matched by
@@ -29,7 +29,7 @@ const content = (row) => ({
   definition: row.definition ?? definitionOf(row),
 });
 
-async function installRules(organizationId, bundleKey, version, rules = []) {
+async function installRules(organizationId, bundleKey, version, rules = [], choices = {}) {
   for (const rule of rules) {
     if (!rule?.key || !rule.service || !rule.name || !["periodic", "relative", "manual"].includes(rule.kind)) {
       throw httpError(400, "Each rule needs a key, a service, a name and a kind");
@@ -41,13 +41,13 @@ async function installRules(organizationId, bundleKey, version, rules = []) {
   try {
     await client.query("BEGIN");
 
-    const summary = { inserted: 0, updated: 0, unchanged: 0, kept: 0, retired: 0 };
+    const summary = { inserted: 0, updated: 0, unchanged: 0, kept: 0, retired: 0, customized: [] };
 
     for (const rule of rules) {
       const shipped = content(rule);
       const found = await client.query("SELECT * FROM obligation_rules WHERE organization_id = $1 AND key = $2", [organizationId, rule.key]);
       const row = found.rows[0];
-      const { action, shippedChecksum, flag } = decide(row && { content: content(row), sourceChecksum: row.source_checksum }, shipped);
+      const { action, shippedChecksum, flag, acknowledge } = decide(row && { content: content(row), sourceChecksum: row.source_checksum }, shipped, optionsFor(choices, "rule", rule.key));
 
       if (action === "insert") {
         await client.query(
@@ -64,11 +64,13 @@ async function installRules(organizationId, bundleKey, version, rules = []) {
       if (action === "keep") {
         await client.query(
           `UPDATE obligation_rules SET bundle_key = $1, retired_at = NULL,
-             update_available_version = CASE WHEN $2 THEN $3 ELSE update_available_version END
+             update_available_version = CASE WHEN $5 THEN NULL WHEN $2 THEN $3 ELSE update_available_version END,
+             source_checksum = CASE WHEN $5 THEN $6 ELSE source_checksum END
            WHERE id = $4`,
-          [bundleKey, flag, version, row.id],
+          [bundleKey, flag, version, row.id, Boolean(acknowledge), shippedChecksum],
         );
         summary.kept += 1;
+        if (flag) summary.customized.push(customized("rule", rule.key, row.name, content(row), shipped, version));
         continue;
       }
 
@@ -96,7 +98,8 @@ async function installRules(organizationId, bundleKey, version, rules = []) {
     );
     summary.retired = retired.rowCount;
 
-    await client.query("COMMIT");
+    // A dry run does all the work and rolls it back, to report what it would do.
+    await client.query(choices.dryRun ? "ROLLBACK" : "COMMIT");
     return summary;
   } catch (error) {
     await client.query("ROLLBACK");

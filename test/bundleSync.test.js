@@ -1,7 +1,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 
-const { canonical, checksum, decide } = require("../src/services/bundleSync");
+const { canonical, checksum, choicesOf, decide, optionsFor } = require("../src/services/bundleSync");
 
 /*
  * The upgrade rule every bundle install endpoint shares: a firm's edits to a
@@ -53,4 +53,42 @@ test("a pre-existing row the bundle adopts is treated as the firm's", () => {
 
   assert.equal(result.action, "keep");
   assert.equal(result.flag, true);
+});
+
+test("accepting takes the bundle's version over the firm's edit", () => {
+  const v1 = { ...shipped, description: "old wording" };
+  const edited = { ...v1, name: "Statutory audit (our way)" };
+  const result = decide({ content: edited, sourceChecksum: checksum(v1) }, shipped, { accept: true });
+
+  assert.equal(result.action, "update");
+  assert.equal(result.accepted, true);
+});
+
+test("dismissing keeps the firm's version and acknowledges this bundle version", () => {
+  const v1 = { ...shipped, description: "old wording" };
+  const edited = { ...v1, name: "Statutory audit (our way)" };
+  const result = decide({ content: edited, sourceChecksum: checksum(v1) }, shipped, { dismiss: true });
+
+  assert.equal(result.action, "keep");
+  assert.equal(result.flag, false);
+  assert.equal(result.acknowledge, true);
+
+  // Afterwards (source_checksum = shipped) the same version no longer flags it.
+  assert.equal(decide({ content: edited, sourceChecksum: result.shippedChecksum }, shipped).flag, false);
+});
+
+test("accept and dismiss change nothing for an item the firm did not edit", () => {
+  const v1 = { ...shipped, description: "old wording" };
+
+  assert.equal(decide({ content: v1, sourceChecksum: checksum(v1) }, shipped, { dismiss: true }).action, "update");
+  assert.equal(decide(null, shipped, { accept: true }).action, "insert");
+});
+
+test("an install request's choices are read per kind and key", () => {
+  const choices = choicesOf({ body: { accept: ["service:gst"], dismiss: ["package:basic"] }, query: { dryRun: "1" } });
+
+  assert.equal(choices.dryRun, true);
+  assert.deepEqual(optionsFor(choices, "service", "gst"), { accept: true, dismiss: false });
+  assert.deepEqual(optionsFor(choices, "package", "basic"), { accept: false, dismiss: true });
+  assert.deepEqual(optionsFor(choicesOf({}), "service", "gst"), { accept: false, dismiss: false });
 });

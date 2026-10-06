@@ -14,6 +14,16 @@ const crypto = require("crypto");
  *   update     — the firm has not touched it: take the shipped content
  *   keep       — the firm edited it: leave it, and flag the newer version when
  *                the bundle's content has moved on (update_available_version)
+ *
+ * An admin may then decide per item (Settings → Profession Bundle), through
+ * the same install call carrying `accept` / `dismiss` lists of "kind:key":
+ *
+ *   accept     — take the bundle's version over the firm's edit (an update)
+ *   dismiss    — keep the firm's version, and record that this bundle version
+ *                was seen (`acknowledge`: source_checksum becomes the shipped
+ *                one), so it is flagged again only when the bundle changes it
+ *
+ * `?dryRun=1` runs the install and rolls it back, to report what it would keep.
  */
 
 // JSON with sorted keys, so equal content always hashes the same.
@@ -40,8 +50,9 @@ function checksum(value) {
 /*
  * existing: null, or { content, sourceChecksum } for the row already there.
  * shipped:  the content the bundle ships for it.
+ * options:  { accept, dismiss } for this item (see optionsFor).
  */
-function decide(existing, shipped) {
+function decide(existing, shipped, options = {}) {
   const shippedChecksum = checksum(shipped);
 
   if (!existing) {
@@ -58,9 +69,36 @@ function decide(existing, shipped) {
     return { action: "update", shippedChecksum, flag: false };
   }
 
+  if (options.accept) {
+    return { action: "update", shippedChecksum, flag: false, accepted: true };
+  }
+
+  if (options.dismiss) {
+    return { action: "keep", shippedChecksum, flag: false, acknowledge: true };
+  }
+
   // Edited by the firm (or a pre-existing row the bundle adopted). Flag only
   // when the bundle now ships something other than what this row came from.
   return { action: "keep", shippedChecksum, flag: existing.sourceChecksum !== shippedChecksum };
 }
 
-module.exports = { canonical, checksum, decide };
+// The per-item choices an install request carries, and whether it is a dry run.
+function choicesOf(req) {
+  const list = (value) => new Set(Array.isArray(value) ? value.map(String) : []);
+  const dryRun = String(req?.query?.dryRun || "");
+
+  return { accept: list(req?.body?.accept), dismiss: list(req?.body?.dismiss), dryRun: dryRun === "1" || dryRun === "true" };
+}
+
+function optionsFor(choices, kind, key) {
+  const id = `${kind}:${key}`;
+  return { accept: Boolean(choices?.accept?.has(id)), dismiss: Boolean(choices?.dismiss?.has(id)) };
+}
+
+// An item kept as the firm's while the bundle ships something else: what an
+// admin is shown, the firm's content beside the bundle's.
+function customized(kind, key, name, mine, theirs, version) {
+  return { kind, key, name, mine, theirs, version };
+}
+
+module.exports = { canonical, checksum, decide, choicesOf, optionsFor, customized };

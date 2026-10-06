@@ -7,6 +7,7 @@ const pool = require("../config/database");
 const ruleService = require("../services/ruleService");
 const obligationService = require("../services/obligationService");
 const reminders = require("../workers/reminderRunner");
+const { choicesOf } = require("../services/bundleSync");
 
 const router = express.Router();
 
@@ -68,7 +69,7 @@ router.put(
       throw error;
     }
 
-    return ruleService.installRules(req.auth.organizationId, key, version, req.body?.obligations || []);
+    return ruleService.installRules(req.auth.organizationId, key, version, req.body?.obligations || [], choicesOf(req));
   }),
 );
 
