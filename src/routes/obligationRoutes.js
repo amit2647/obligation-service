@@ -89,6 +89,44 @@ router.post(
 
 router.get("/obligations/rules", ...gated("obligations.read"), respond((req) => ruleService.listRules(req.auth.organizationId)));
 
+// A firm adds, edits or removes a deadline from the service screen; the open
+// deadlines of every engagement using that service follow at once (filed ones
+// never change — generation leaves them alone).
+async function regenerateFor(organizationId, serviceKey) {
+  for (const engagementId of await ruleService.engagementsUsing(organizationId, serviceKey)) {
+    await obligationService.generateForEngagement(organizationId, engagementId);
+  }
+}
+
+router.post(
+  "/obligations/rules",
+  ...gated("obligations.rules"),
+  respond(async (req) => {
+    const rule = await ruleService.createRule(req.auth.organizationId, req.body || {});
+    await regenerateFor(req.auth.organizationId, rule.service_key);
+    return rule;
+  }),
+);
+
+router.put(
+  "/obligations/rules/:key",
+  ...gated("obligations.rules"),
+  respond(async (req) => {
+    const rule = await ruleService.updateRule(req.auth.organizationId, req.params.key, req.body || {});
+    await regenerateFor(req.auth.organizationId, rule.service_key);
+    return rule;
+  }),
+);
+
+router.delete(
+  "/obligations/rules/:key",
+  ...gated("obligations.rules"),
+  respond(async (req) => {
+    const rule = await ruleService.removeRule(req.auth.organizationId, req.params.key);
+    await regenerateFor(req.auth.organizationId, rule.service_key);
+  }),
+);
+
 router.patch(
   "/obligations/rules/:key",
   ...gated("obligations.rules"),

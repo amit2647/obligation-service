@@ -1,3 +1,5 @@
+const { checkRule } = require("bundle-sdk");
+
 const pool = require("../config/database");
 const { customized, decide, optionsFor } = require("./bundleSync");
 
@@ -111,7 +113,7 @@ async function installRules(organizationId, bundleKey, version, rules = [], choi
 
 async function listRules(organizationId) {
   const rules = await pool.query(
-    `SELECT id, key, service_key, name, kind, frequency, definition, revision, is_active, update_available_version
+    `SELECT id, key, service_key, name, kind, frequency, definition, revision, is_active, update_available_version, bundle_key
      FROM obligation_rules WHERE organization_id = $1 AND retired_at IS NULL ORDER BY service_key, name`,
     [organizationId],
   );
@@ -167,4 +169,123 @@ async function removeOverride(organizationId, key, periodKey) {
   await pool.query("DELETE FROM obligation_overrides WHERE rule_id = $1 AND period_key = $2", [rule.id, periodKey]);
 }
 
-module.exports = { installRules, listRules, getRule, setActive, setOverride, removeOverride, definitionOf };
+/*
+ * A firm's own rules, and its edits to the bundle's, from the service screen.
+ * The rule is checked by bundle-sdk (checkRule: the contract, the catalog and
+ * a one-year dry run) against this organization's service keys, so a rule
+ * saved here is as sound as one a bundle ships. Editing a bundle rule changes
+ * its content away from source_checksum, so an upgrade keeps the firm's
+ * version and flags it (bundleSync) — no bookkeeping needed here.
+ */
+const EDITABLE = ["frequency", "schedule", "condition", "else"];
+
+async function serviceKeys(organizationId) {
+  const result = await pool.query(
+    "SELECT key FROM services WHERE organization_id = $1 AND key IS NOT NULL AND retired_at IS NULL",
+    [organizationId],
+  );
+  return result.rows.map((row) => row.key);
+}
+
+async function periodOptions(organizationId) {
+  const type = await pool.query(
+    "SELECT period_kind, period_start_month FROM engagement_types WHERE organization_id = $1 AND retired_at IS NULL ORDER BY id LIMIT 1",
+    [organizationId],
+  );
+  const row = type.rows[0];
+  return row && row.period_kind !== "none" ? { periodKind: row.period_kind, periodStartMonth: row.period_start_month || 4 } : {};
+}
+
+// The rule as bundle-sdk sees it; unset optional parts are left out.
+function asRule(key, serviceKey, name, revision, input) {
+  const rule = { key, service: serviceKey, name, revision, kind: "periodic" };
+
+  for (const field of EDITABLE) {
+    if (input[field] !== undefined && input[field] !== null && input[field] !== "") rule[field] = input[field];
+  }
+
+  return rule;
+}
+
+async function check(organizationId, rule) {
+  const { errors } = checkRule(rule, { services: await serviceKeys(organizationId), ...(await periodOptions(organizationId)) });
+
+  if (errors.length > 0) throw httpError(400, `This deadline cannot be saved: ${errors[0]}`, { rule: errors });
+}
+
+function keyFrom(name) {
+  const base = String(name).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return (/^[a-z][a-z0-9_]/.test(base) ? base : `r_${base}`).slice(0, 50);
+}
+
+async function createRule(organizationId, input = {}) {
+  const name = String(input.name || "").trim();
+
+  if (!name) throw httpError(400, "Name the deadline", { name: "e.g. GSTR-1" });
+  if (!input.serviceKey) throw httpError(400, "Choose the service it belongs to", { serviceKey: "Required" });
+
+  // A key unique in the organization: the name, numbered when taken.
+  const taken = new Set((await pool.query("SELECT key FROM obligation_rules WHERE organization_id = $1", [organizationId])).rows.map((row) => row.key));
+  const base = keyFrom(name);
+  let key = base;
+  for (let number = 2; taken.has(key); number += 1) key = `${base}_${number}`;
+
+  const rule = asRule(key, input.serviceKey, name, 1, input);
+  await check(organizationId, rule);
+
+  await pool.query(
+    `INSERT INTO obligation_rules (organization_id, bundle_key, key, service_key, name, kind, frequency, definition, revision)
+     VALUES ($1, NULL, $2, $3, $4, 'periodic', $5, $6, 1)`,
+    [organizationId, key, rule.service, name, rule.frequency, definitionOf(rule)],
+  );
+
+  return getRule(organizationId, key);
+}
+
+// Name and timing change; the service a rule belongs to does not.
+async function updateRule(organizationId, key, input = {}) {
+  const existing = await getRule(organizationId, key);
+  const name = input.name === undefined ? existing.name : String(input.name).trim();
+
+  if (!name) throw httpError(400, "Name the deadline", { name: "Required" });
+
+  const rule = asRule(key, existing.service_key, name, existing.revision, input);
+  await check(organizationId, rule);
+
+  await pool.query(
+    "UPDATE obligation_rules SET name = $1, kind = 'periodic', frequency = $2, definition = $3, updated_at = NOW() WHERE id = $4",
+    [name, rule.frequency, definitionOf(rule), existing.id],
+  );
+
+  return getRule(organizationId, key);
+}
+
+// Only the firm's own rules go; a bundle rule is switched off instead, since
+// the next upgrade would bring it back. Its open deadlines leave with it.
+async function removeRule(organizationId, key) {
+  const existing = await getRule(organizationId, key);
+
+  if (existing.bundle_key) {
+    throw httpError(409, "This deadline comes with the profession bundle: switch it off instead");
+  }
+
+  await pool.query("UPDATE obligation_rules SET retired_at = NOW(), updated_at = NOW() WHERE id = $1", [existing.id]);
+  return existing;
+}
+
+// The engagements whose deadlines a change to this service's rules affects.
+async function engagementsUsing(organizationId, serviceKey) {
+  const result = await pool.query(
+    `SELECT DISTINCT e.id FROM engagements e
+       JOIN engagement_lines l ON l.engagement_id = e.id
+       JOIN services s ON s.id = l.service_id
+     WHERE e.organization_id = $1 AND s.key = $2`,
+    [organizationId, serviceKey],
+  );
+  return result.rows.map((row) => row.id);
+}
+
+module.exports = {
+  installRules, listRules, getRule, setActive, setOverride, removeOverride, definitionOf,
+  createRule, updateRule, removeRule, engagementsUsing, keyFrom,
+};
