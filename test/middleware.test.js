@@ -1,18 +1,20 @@
-const { describe, test, beforeEach, mock } = require("node:test");
+const { describe, test, before, beforeEach, mock } = require("node:test");
 const assert = require("node:assert/strict");
 const jwt = require("jsonwebtoken");
 
 /*
  * The request pipeline every route in this service goes through:
- * authenticate (JWT + live access grants) and requirePermission.
+ * authenticate (Hydra's JWT + live access grants) and requirePermission.
  *
  * Each service keeps its own copy of these files, so each tests its own copy.
  * Assertions are on status codes and whether next() ran, not on error bodies,
  * which differ between copies without differing in meaning.
  */
 
-process.env.JWT_SECRET = "unit-test-secret";
-process.env.JWT_ISSUER = "unit-test-issuer";
+// Hydra's tokens, signed with a test key served as a stubbed JWKS.
+const hydra = require("./helpers/hydraToken");
+
+before(() => hydra.ready);
 
 // The grant lookup is the only database call on this path. It is replaced
 // before the middleware loads, so no test needs a database.
@@ -61,8 +63,8 @@ async function run(middleware, req) {
   return { res, nextCalled };
 }
 
-function sign(overrides = {}, { secret, issuer, expiresIn = "5m" } = {}) {
-  return jwt.sign(
+function sign(overrides = {}, options = {}) {
+  return hydra.sign(
     {
       sub: 7,
       organizationId: 3,
@@ -70,8 +72,7 @@ function sign(overrides = {}, { secret, issuer, expiresIn = "5m" } = {}) {
       permissions: ["leads.read"],
       ...overrides,
     },
-    secret || process.env.JWT_SECRET,
-    { issuer: issuer || process.env.JWT_ISSUER, expiresIn },
+    options,
   );
 }
 
@@ -147,8 +148,9 @@ describe("authenticate", () => {
     assert.equal(res.statusCode, 401);
   });
 
-  test("rejects a token signed with another secret", async () => {
-    const { res, nextCalled } = await run(authenticate, withBearer(sign({}, { secret: "other" })));
+  test("rejects a token signed with another key", async () => {
+    const other = require("crypto").generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey;
+    const { res, nextCalled } = await run(authenticate, withBearer(sign({}, { key: other })));
 
     assert.equal(nextCalled, false);
     assert.equal(res.statusCode, 401);
@@ -157,7 +159,7 @@ describe("authenticate", () => {
   test("rejects a token from another issuer", async () => {
     const { res, nextCalled } = await run(
       authenticate,
-      withBearer(sign({}, { issuer: "someone-else" })),
+      withBearer(sign({}, { issuer: "http://someone-else/" })),
     );
 
     assert.equal(nextCalled, false);
@@ -165,11 +167,7 @@ describe("authenticate", () => {
   });
 
   test("rejects an expired token", async () => {
-    const expired = jwt.sign(
-      { sub: 7, organizationId: 3, permissions: [], exp: Math.floor(Date.now() / 1000) - 60 },
-      process.env.JWT_SECRET,
-      { issuer: process.env.JWT_ISSUER },
-    );
+    const expired = sign({ permissions: [], exp: Math.floor(Date.now() / 1000) - 60 }, { expiresIn: null });
 
     const { res, nextCalled } = await run(authenticate, withBearer(expired));
 
@@ -177,11 +175,24 @@ describe("authenticate", () => {
     assert.equal(res.statusCode, 401);
   });
 
-  test("fails closed when JWT_SECRET is unset", async () => {
-    const token = sign();
-    const saved = process.env.JWT_SECRET;
+  test("refuses an HS256 token signed with the old shared secret", async () => {
+    const legacy = jwt.sign(
+      { sub: 7, organizationId: 3, role: "SUPER_ADMIN", permissions: ["leads.read"] },
+      "omnicore-development-secret-change-this",
+      { issuer: "omnicore-identity-service", expiresIn: "5m" },
+    );
 
-    delete process.env.JWT_SECRET;
+    const { res, nextCalled } = await run(authenticate, withBearer(legacy));
+
+    assert.equal(nextCalled, false);
+    assert.equal(res.statusCode, 401);
+  });
+
+  test("fails closed when HYDRA_JWKS_URL is unset", async () => {
+    const token = sign();
+    const saved = process.env.HYDRA_JWKS_URL;
+
+    delete process.env.HYDRA_JWKS_URL;
 
     try {
       const { res, nextCalled } = await run(authenticate, withBearer(token));
@@ -191,7 +202,7 @@ describe("authenticate", () => {
       assert.equal(nextCalled, false);
       assert.ok(res.statusCode >= 400);
     } finally {
-      process.env.JWT_SECRET = saved;
+      process.env.HYDRA_JWKS_URL = saved;
     }
   });
 

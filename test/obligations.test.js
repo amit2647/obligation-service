@@ -8,8 +8,10 @@ const jwt = require("jsonwebtoken");
  * the database (COMP-01–07, FIX-08, FIX-15, FIX-20).
  */
 
-process.env.JWT_SECRET = "unit-test-secret";
-process.env.JWT_ISSUER = "unit-test-issuer";
+// Hydra's tokens, signed with a test key served as a stubbed JWKS.
+const hydra = require("./helpers/hydraToken");
+
+before(() => hydra.ready);
 process.env.BUNDLE_SERVICE_URL = "http://bundle-service.test";
 process.env.EMAIL_SERVICE_URL = "http://email-service.test";
 
@@ -207,7 +209,7 @@ describe("routes", () => {
   const call = (method, path, permissions, body) =>
     realFetch(`${base}${path}`, {
       method,
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt.sign({ sub: 1, organizationId: 3, role: "X", permissions }, process.env.JWT_SECRET, { issuer: process.env.JWT_ISSUER })}` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${hydra.sign({ sub: 1, organizationId: 3, role: "X", permissions })}` },
       body: body && JSON.stringify(body),
     });
 
