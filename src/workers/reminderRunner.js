@@ -21,9 +21,13 @@ const pool = require("../config/database");
 
 const EMAIL_SERVICE_URL = process.env.EMAIL_SERVICE_URL || "http://email-service:4006";
 const INTERVAL_MS = Number(process.env.OBLIGATION_REMINDER_INTERVAL_MS || 60 * 60 * 1000);
-const REMINDER_DAYS = 7;
-const OVERDUE_WINDOW_DAYS = 30;
-const BATCH = 200;
+// Remind this many days before a deadline (OBLIGATION_REMINDER_DAYS); keep
+// reminding about an overdue one for this many days (OBLIGATION_OVERDUE_WINDOW_DAYS);
+// deadlines read per pass (OBLIGATION_REMINDER_BATCH).
+const REMINDER_DAYS = Number(process.env.OBLIGATION_REMINDER_DAYS) || 7;
+const OVERDUE_WINDOW_DAYS = Number(process.env.OBLIGATION_OVERDUE_WINDOW_DAYS) || 30;
+const BATCH = Number(process.env.OBLIGATION_REMINDER_BATCH) || 200;
+const TIMEOUT_MS = Number(process.env.SERVICE_CALL_TIMEOUT_MS) || 10 * 1000;
 
 function serviceToken(organizationId) {
   return jwt.sign(
@@ -43,7 +47,7 @@ async function trigger(organizationId, event, dedupeKey, payload) {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${serviceToken(organizationId)}` },
     body: JSON.stringify({ event, dedupe_key: dedupeKey, payload }),
-    signal: AbortSignal.timeout(5000),
+    signal: AbortSignal.timeout(TIMEOUT_MS),
   });
 
   if (!response.ok) {

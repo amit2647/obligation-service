@@ -16,7 +16,8 @@ const pool = require("../config/database");
  * organization's time zone (COMP-02, FIX-08).
  */
 
-const DUE_SOON_DAYS = 30;
+// A deadline this many days away or fewer is "due soon" (OBLIGATION_DUE_SOON_DAYS).
+const DUE_SOON_DAYS = Number(process.env.OBLIGATION_DUE_SOON_DAYS) || 30;
 
 // Sort order of the feed (COMP-05).
 const STATE_ORDER = ["overdue", "due_soon", "in_progress", "upcoming", "completed"];

@@ -10,7 +10,10 @@
  */
 
 const BUNDLE_SERVICE_URL = process.env.BUNDLE_SERVICE_URL || "http://bundle-service:4008";
-const TTL_MS = 60 * 1000;
+// How long an installed bundle is remembered per organization, and how long
+// to wait for bundle-service (BUNDLE_CACHE_TTL_MS, SERVICE_CALL_TIMEOUT_MS).
+const TTL_MS = Number(process.env.BUNDLE_CACHE_TTL_MS) || 60 * 1000;
+const TIMEOUT_MS = Number(process.env.SERVICE_CALL_TIMEOUT_MS) || 10 * 1000;
 
 const cache = new Map();
 
@@ -23,7 +26,7 @@ async function installedBundle(organizationId, token) {
 
   const response = await fetch(`${BUNDLE_SERVICE_URL}/bundles/installed`, {
     headers: { Authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(10 * 1000),
+    signal: AbortSignal.timeout(TIMEOUT_MS),
   });
 
   if (!response.ok) {
