@@ -37,9 +37,11 @@ function serviceToken(organizationId) {
   );
 }
 
+// dd/mm/yyyy, like every date the product shows, from the date-only value
+// itself: the date in the email is the date stored, never shifted.
 const formatDay = (value) => {
-  const [year, month, day] = value.split("-").map(Number);
-  return new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(year, month - 1, day)));
+  const [year, month, day] = String(value).slice(0, 10).split("-");
+  return `${day}/${month}/${year}`;
 };
 
 async function trigger(organizationId, event, dedupeKey, payload) {

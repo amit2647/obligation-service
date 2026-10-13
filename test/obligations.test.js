@@ -186,7 +186,7 @@ describe("reminders", () => {
 
     assert.deepEqual([claims.organizationId, claims.scope], [3, "automations.trigger"]);
     assert.equal(triggered[0].body.payload.client.email, "a@acme.example");
-    assert.equal(triggered[0].body.payload.obligation.due_on, "1 January 2099");
+    assert.equal(triggered[0].body.payload.obligation.due_on, "01/01/2099");
   });
 });
 
